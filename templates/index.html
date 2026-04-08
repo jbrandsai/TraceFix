@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TraceFix — Integration Diagnostics</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <div class="container">
+      <div class="hero">
+        <div class="hero-left">
+          <div class="brand-row">
+            <div class="logo-mark">TF</div>
+            <div class="brand-text">
+              <div class="brand-name">TraceFix</div>
+              <div class="brand-sub">Integration Diagnostics</div>
+            </div>
+          </div>
+
+          <h1 class="hero-title">Fix My Integration</h1>
+
+          <p class="hero-subtitle">
+            Plain-English diagnostics for broken workflows, APIs, and automation.
+          </p>
+
+          <p class="hero-tagline">
+            Diagnose failures in seconds — no log digging required.
+          </p>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card input-card">
+          <div class="section-header">
+            <h2>Analyze an Issue</h2>
+            <p>Enter the details below or use an example to test the app.</p>
+          </div>
+
+          <div class="examples">
+            <button type="button" class="secondary-btn example-btn" data-example="schema">Load Schema Example</button>
+            <button type="button" class="secondary-btn example-btn" data-example="auth">Load Auth Example</button>
+            <button type="button" class="secondary-btn example-btn" data-example="rate_limit">Load Rate Limit Example</button>
+            <button type="button" class="secondary-btn example-btn" data-example="data_type">Load Data Type Example</button>
+          </div>
+
+          <label for="error_text">Error Message</label>
+          <textarea id="error_text" placeholder='Example: 400 Bad Request - Missing required field "customer_id"'></textarea>
+
+          <label for="payload_text">JSON Payload (optional)</label>
+          <textarea id="payload_text" placeholder='Example: { "name": "John Doe", "email": "john@email.com" }'></textarea>
+
+          <label for="api_response_text">API Response / Raw Response Text (optional)</label>
+          <textarea id="api_response_text" placeholder='Example: { "error": "Missing required field customer_id" } or 401 Unauthorized'></textarea>
+
+          <div class="action-row">
+            <button id="analyze_btn" class="primary-btn">Analyze</button>
+            <button id="clear_btn" class="secondary-btn" type="button">Clear</button>
+          </div>
+
+          <div id="message" class="message hidden"></div>
+        </div>
+
+        <div class="card result-card">
+          <div class="section-header result-header">
+            <div>
+              <h2>Diagnosis</h2>
+              <p>Clear explanation of what likely broke and what to do next.</p>
+            </div>
+            <button id="copy_btn" class="secondary-btn hidden" type="button">Copy Diagnosis</button>
+          </div>
+
+          <div id="loading_state" class="loading-state hidden">
+            <div class="spinner"></div>
+            <p>Analyzing integration issue...</p>
+          </div>
+
+          <div id="empty_state" class="empty-state">
+            <h3>No analysis yet</h3>
+            <p>Run an analysis and your diagnosis will appear here.</p>
+          </div>
+
+          <div id="result_card" class="result hidden">
+            <div class="pill-row">
+              <div class="pill">
+                <span class="pill-label">Issue Type</span>
+                <span id="issue_type"></span>
+              </div>
+              <div class="pill">
+                <span class="pill-label">Confidence</span>
+                <span id="confidence"></span>
+              </div>
+              <div class="pill">
+                <span class="pill-label">Payload JSON</span>
+                <span id="payload_valid_json"></span>
+              </div>
+            </div>
+
+            <div class="result-block">
+              <strong>Root Cause</strong>
+              <p id="root_cause"></p>
+            </div>
+
+            <div class="result-block">
+              <strong>Why This Happened</strong>
+              <p id="why_this_happened"></p>
+            </div>
+
+            <div class="result-block">
+              <strong>Suggested Fix Example</strong>
+              <p id="suggested_fix_example"></p>
+            </div>
+
+            <div class="result-block">
+              <strong>Fields Involved</strong>
+              <p id="fields_involved"></p>
+            </div>
+
+            <div class="result-block">
+              <strong>Next Steps</strong>
+              <ol id="next_steps"></ol>
+            </div>
+
+            <div class="result-block">
+              <strong>Payload Warnings</strong>
+              <ul id="payload_warnings"></ul>
+            </div>
+
+            <div class="result-block">
+              <strong>Matched Signals</strong>
+              <ul id="matched_signals"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const analyzeBtn = document.getElementById("analyze_btn");
+    const clearBtn = document.getElementById("clear_btn");
+    const copyBtn = document.getElementById("copy_btn");
+    const exampleButtons = document.querySelectorAll(".example-btn");
+
+    const errorTextEl = document.getElementById("error_text");
+    const payloadTextEl = document.getElementById("payload_text");
+    const apiResponseTextEl = document.getElementById("api_response_text");
+
+    const messageEl = document.getElementById("message");
+    const resultCardEl = document.getElementById("result_card");
+    const emptyStateEl = document.getElementById("empty_state");
+    const loadingStateEl = document.getElementById("loading_state");
+
+    const issueTypeEl = document.getElementById("issue_type");
+    const rootCauseEl = document.getElementById("root_cause");
+    const confidenceEl = document.getElementById("confidence");
+    const whyThisHappenedEl = document.getElementById("why_this_happened");
+    const nextStepsEl = document.getElementById("next_steps");
+    const suggestedFixExampleEl = document.getElementById("suggested_fix_example");
+    const fieldsInvolvedEl = document.getElementById("fields_involved");
+    const payloadValidJsonEl = document.getElementById("payload_valid_json");
+    const payloadWarningsEl = document.getElementById("payload_warnings");
+    const matchedSignalsEl = document.getElementById("matched_signals");
+
+    let latestResult = null;
+
+    const examples = {
+      schema: {
+        error_text: '400 Bad Request',
+        payload_text: '{\n  "name": "John Doe"\n}',
+        api_response_text: 'Missing required field "customer_id"'
+      },
+      auth: {
+        error_text: 'Request failed during sync',
+        payload_text: '{\n  "customer_id": 123,\n  "name": "John Doe"\n}',
+        api_response_text: '401 Unauthorized - Expired token'
+      },
+      rate_limit: {
+        error_text: 'Sync failed',
+        payload_text: '{\n  "customer_id": 123\n}',
+        api_response_text: '429 Too Many Requests - quota exceeded'
+      },
+      data_type: {
+        error_text: 'Invalid type for field "customer_id". Expected integer.',
+        payload_text: '{\n  "customer_id": "",\n  "email": null\n}',
+        api_response_text: 'expected integer'
+      }
+    };
+
+    function showMessage(text, isError = false) {
+      messageEl.textContent = text;
+      messageEl.classList.remove("hidden");
+      messageEl.classList.toggle("error", isError);
+      messageEl.classList.toggle("success", !isError);
+    }
+
+    function clearMessage() {
+      messageEl.textContent = "";
+      messageEl.classList.add("hidden");
+      messageEl.classList.remove("error", "success");
+    }
+
+    function renderList(listEl, values, emptyText) {
+      listEl.innerHTML = "";
+
+      if (!values || values.length === 0) {
+        const li = document.createElement("li");
+        li.textContent = emptyText;
+        listEl.appendChild(li);
+        return;
+      }
+
+      values.forEach(value => {
+        const li = document.createElement("li");
+        li.textContent = value;
+        listEl.appendChild(li);
+      });
+    }
+
+    function buildCopyText(result) {
+      const nextSteps = (result.next_steps || []).map((step, index) => `${index + 1}. ${step}`).join("\n");
+      const payloadWarnings = (result.payload_warnings || []).length
+        ? result.payload_warnings.join("\n- ")
+        : "None";
+      const matchedSignals = (result.matched_signals || []).length
+        ? result.matched_signals.join(", ")
+        : "None";
+      const fields = (result.fields_involved || []).length
+        ? result.fields_involved.join(", ")
+        : "None";
+
+      return [
+        "TraceFix - Diagnosis",
+        "",
+        `Issue Type: ${result.issue_type || ""}`,
+        `Confidence: ${result.confidence || 0}%`,
+        `Payload Valid JSON: ${result.payload_valid_json ? "Yes" : "No"}`,
+        "",
+        `Root Cause: ${result.root_cause || ""}`,
+        "",
+        `Why This Happened: ${result.why_this_happened || ""}`,
+        "",
+        `Suggested Fix Example: ${result.suggested_fix_example || ""}`,
+        "",
+        `Fields Involved: ${fields}`,
+        "",
+        "Next Steps:",
+        nextSteps || "None",
+        "",
+        `Payload Warnings: ${payloadWarnings === "None" ? "None" : "- " + payloadWarnings}`,
+        `Matched Signals: ${matchedSignals}`
+      ].join("\n");
+    }
+
+    function renderResult(result) {
+      latestResult = result;
+
+      issueTypeEl.textContent = result.issue_type || "";
+      rootCauseEl.textContent = result.root_cause || "";
+      confidenceEl.textContent = `${result.confidence || 0}%`;
+      whyThisHappenedEl.textContent = result.why_this_happened || "";
+      suggestedFixExampleEl.textContent = result.suggested_fix_example || "";
+      payloadValidJsonEl.textContent = result.payload_valid_json ? "Yes" : "No";
+
+      const fields = result.fields_involved || [];
+      fieldsInvolvedEl.textContent = fields.length ? fields.join(", ") : "None detected";
+
+      nextStepsEl.innerHTML = "";
+      (result.next_steps || []).forEach(step => {
+        const li = document.createElement("li");
+        li.textContent = step;
+        nextStepsEl.appendChild(li);
+      });
+
+      renderList(payloadWarningsEl, result.payload_warnings || [], "No payload warnings detected");
+      renderList(matchedSignalsEl, result.matched_signals || [], "No matched signals");
+
+      emptyStateEl.classList.add("hidden");
+      loadingStateEl.classList.add("hidden");
+      resultCardEl.classList.remove("hidden");
+      copyBtn.classList.remove("hidden");
+    }
+
+    function resetResultArea() {
+      latestResult = null;
+      resultCardEl.classList.add("hidden");
+      loadingStateEl.classList.add("hidden");
+      copyBtn.classList.add("hidden");
+      emptyStateEl.classList.remove("hidden");
+    }
+
+    function setLoadingState(isLoading) {
+      if (isLoading) {
+        resultCardEl.classList.add("hidden");
+        emptyStateEl.classList.add("hidden");
+        loadingStateEl.classList.remove("hidden");
+        copyBtn.classList.add("hidden");
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = "Analyzing...";
+      } else {
+        loadingStateEl.classList.add("hidden");
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = "Analyze";
+      }
+    }
+
+    exampleButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        const key = button.dataset.example;
+        const example = examples[key];
+        if (!example) return;
+
+        errorTextEl.value = example.error_text;
+        payloadTextEl.value = example.payload_text;
+        apiResponseTextEl.value = example.api_response_text;
+
+        clearMessage();
+        resetResultArea();
+        showMessage("Example loaded.");
+      });
+    });
+
+    clearBtn.addEventListener("click", () => {
+      errorTextEl.value = "";
+      payloadTextEl.value = "";
+      apiResponseTextEl.value = "";
+      clearMessage();
+      resetResultArea();
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      if (!latestResult) return;
+
+      try {
+        await navigator.clipboard.writeText(buildCopyText(latestResult));
+        showMessage("Diagnosis copied.");
+      } catch (error) {
+        showMessage("Could not copy diagnosis.", true);
+      }
+    });
+
+    analyzeBtn.addEventListener("click", async () => {
+      clearMessage();
+      resetResultArea();
+
+      const error_text = errorTextEl.value.trim();
+      const payload_text = payloadTextEl.value.trim();
+      const api_response_text = apiResponseTextEl.value.trim();
+
+      if (!error_text) {
+        showMessage("Please enter an error message before analyzing.", true);
+        return;
+      }
+
+      setLoadingState(true);
+
+      try {
+        const response = await fetch("/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            error_text,
+            payload_text,
+            api_response_text
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          setLoadingState(false);
+          resetResultArea();
+          showMessage(data.message || "Analysis failed.", true);
+          return;
+        }
+
+        setLoadingState(false);
+        renderResult(data.result);
+        showMessage("Analysis complete.");
+      } catch (error) {
+        setLoadingState(false);
+        resetResultArea();
+        showMessage("Something went wrong while contacting the server.", true);
+      }
+    });
+  </script>
+</body>
+</html>
